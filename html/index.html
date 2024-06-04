@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Realtime Location Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+
+    <!-- Leaflet Routing Machine CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+    
+        #outer-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            overflow: hidden;
+            box-sizing: border-box;
+            border-radius: 20px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            background-color: #fff;
+        }
+    
+        #map-container {
+            width: 50%;
+            height: 100%;
+            position: relative;
+            border-right: 1px solid #ccc;
+        }
+    
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+    
+        .logo {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+        }
+    
+        .logo img {
+            max-height: 80px;
+        }
+    
+        .content {
+            width: 50%;
+            padding: 40px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+    
+        h1 {
+            font-size: 28px;
+            margin-bottom: 20px;
+            color: #0073ff;
+            font-family:'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif
+        }
+    
+        .search-bar {
+            display: flex;
+            margin-bottom: 20px;
+        }
+    
+        .search-bar input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px 0 0 5px;
+            outline: none;
+        }
+    
+        .search-bar button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 0 5px 5px 0;
+            cursor: pointer;
+        }
+    
+        .recent-history {
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            max-height: 200px;
+            overflow-y: auto;
+            padding: 10px;
+        }
+    
+        .recent-history-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+    
+        .recent-history-item:hover {
+            background-color: #f9f9f9;
+        }
+    
+        .recent-history-item:last-child {
+            border-bottom: none;
+        }
+    
+        .distance-info {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <div id="outer-container">
+        <div id="map-container">
+            <div class="logo">
+                <img src="./logo.png" alt="Logo">
+            </div>
+            <div id="map"></div>
+        </div>
+        <div class="divider"></div> <!-- Divider element -->
+        <div class="content">
+            <!-- Add any other content you want in the right half of the page -->
+            <h1>Welcome to the Realtime Location Tracker</h1>
+            <div class="search-bar">
+                <input type="text" id="search-input" list="city-list" placeholder="Search cities in India...">
+                <datalist id="city-list">
+                    <!-- List of cities will be populated here dynamically -->
+                </datalist>
+                <button onclick="searchCity()">Search</button>
+            </div>
+            <div class="distance-info" id="distance-info"></div>
+            <div class="recent-history">
+                <!-- Recent search history will be displayed here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+
+    <!-- Leaflet Routing Machine JS -->
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+    <script>
+        // Recent search history array
+        var recentSearches = [];
+
+        // Maximum number of recent searches to display
+        var maxRecentSearches = 6;
+
+        // Map initialization 
+        var map = L.map('map').setView([20.5937, 78.9629], 5);
+
+        // OSM layer
+        var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        });
+        osm.addTo(map);
+
+        var liveLocationMarker;
+        var searchedLocationMarker;
+        var liveLocation;
+
+        // Function to calculate distance using Haversine formula
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Radius of the Earth in km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const distance = R * c; // Distance in km
+            return distance;
+        }
+
+        // Define a variable to hold the route control
+        var routeControl;
+
+        function searchCity() {
+            const input = document.getElementById('search-input').value;
+            if (cities.includes(input)) {
+                alert('vehicle found: ' + input);
+                updateRecentHistory(input); // Update recent search history
+
+                // Get the coordinates of the searched city
+                var cityCoordinates = getCityCoordinates(input);
+
+                // Remove existing searched location marker
+                if (searchedLocationMarker) {
+                    map.removeLayer(searchedLocationMarker);
+                }
+
+                // Add marker for the searched city
+                searchedLocationMarker = L.marker(cityCoordinates, { icon: redIcon }).addTo(map);
+
+                // Center the map on the searched city
+                map.setView(cityCoordinates, 10);
+
+                // Calculate and display the distance if live location is available
+                if (liveLocation) {
+                    const distance = calculateDistance(
+                        liveLocation[0],
+                        liveLocation[1],
+                        cityCoordinates[0],
+                        cityCoordinates[1]
+                    );
+                    document.getElementById('distance-info').textContent = `Distance to ${input}: ${distance.toFixed(2)} km`;
+
+                    // Remove the existing route if any
+                    if (routeControl) {
+                        map.removeControl(routeControl);
+                    }
+
+                    // Draw the route between live location and searched location
+                    routeControl = L.Routing.control({
+                        waypoints: [
+                            L.latLng(liveLocation[0], liveLocation[1]),
+                            L.latLng(cityCoordinates[0], cityCoordinates[1])
+                        ],
+                        routeWhileDragging: true
+                    }).addTo(map);
+                }
+            } else {
+                alert('City not found. Please select a valid city from the list.');
+            }
+        }
+
+        function updateRecentHistory(city) {
+            // Add the city to recent searches array
+            recentSearches.unshift(city);
+
+            // Ensure recent searches don't exceed the maximum limit
+            if (recentSearches.length > maxRecentSearches) {
+                recentSearches.pop(); // Remove the oldest search
+            }
+
+            // Update the recent history displayed on the page
+            var historyContainer = document.querySelector('.recent-history');
+            historyContainer.innerHTML = ''; // Clear the existing history
+
+            recentSearches.forEach(function(search) {
+                var item = document.createElement('div');
+                item.classList.add('recent-history-item');
+                item.textContent = search;
+                historyContainer.appendChild(item);
+            });
+        }
+
+        // Function to get coordinates of a city
+        function getCityCoordinates(cityName) {
+            switch (cityName) {
+                    case "honda city":
+                        return [13.0827, 80.2707];
+                    case "hero honda splendor":
+                        return [11.0168, 76.9558];
+                default:
+                    return null; // Return null if coordinates are not available
+            }
+        }
+
+        const cities = [
+            "honda city",
+            "hero honda splendor",
+        ];
+
+        var blueIcon = L.icon({
+            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png',
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41]
+        });
+        
+        var redIcon = L.icon({
+            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41]
+        });
+        
+        // Get live location
+        if (navigator.geolocation) {
+            navigator.geolocation.watchPosition(function(position) {
+                liveLocation = [position.coords.latitude, position.coords.longitude];
+                var latlng = liveLocation;
+
+                // Remove existing live location marker
+                if (liveLocationMarker) {
+                    map.removeLayer(liveLocationMarker);
+                }
+
+                // Add marker for live location
+                liveLocationMarker = L.marker(latlng, { icon: blueIcon }).addTo(map);
+            });
+        } else {
+            console.log("Geolocation is not supported by this browser.");
+        }
+
+        // Populate datalist with city names
+        const cityList = document.getElementById('city-list');
+        cities.forEach(city => {
+            const option = document.createElement('option');
+            option.value = city;
+            cityList.appendChild(option);
+        });
+    </script>
+</body>
+</html>
